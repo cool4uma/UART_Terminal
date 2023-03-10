@@ -1,5 +1,9 @@
 # UART Terminal for Flipper Zero
 [Flipper Zero](https://flipperzero.one/) app to control various devices via UART interface.
+## Download fap
+| **FW Official** | **FW Unleashed** |
+| - | - |
+| [![FAP Factory](https://flipc.org/api/v1/cool4uma/UART_Terminal/badge)](https://flipc.org/cool4uma/UART_Terminal) | [![FAP Factory](https://flipc.org/api/v1/cool4uma/UART_Terminal/badge?firmware=unleashed)](https://flipc.org/cool4uma/UART_Terminal?firmware=unleashed) |
 
 ## Capabilities
 - Read log and command output by uart
