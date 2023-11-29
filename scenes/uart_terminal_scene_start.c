@@ -1,71 +1,76 @@
 #include "../uart_terminal_app_i.h"
 
-// For each command, define whether additional arguments are needed
-// (enabling text input to fill them out), and whether the console
-// text box should focus at the start of the output or the end
-typedef enum { NO_ARGS = 0, INPUT_ARGS, TOGGLE_ARGS } InputArgs;
+// Command action type
+typedef enum { NO_ACTION = 0, OPEN_SETUP, OPEN_PORT, SEND_CMD, OPEN_HELP } ActionType;
+// Command availability in different modes
+typedef enum { OFF = 0, TEXT_MODE = 1, HEX_MODE = 2, BOTH_MODES = 3 } ModeMask;
 
-typedef enum { FOCUS_CONSOLE_END = 0, FOCUS_CONSOLE_START, FOCUS_CONSOLE_TOGGLE } FocusConsole;
+#define MAX_OPTIONS (8)
 
-#define SHOW_STOPSCAN_TIP (true)
-#define NO_TIP (false)
-
-#define MAX_OPTIONS (25)
 typedef struct {
     const char* item_string;
     const char* options_menu[MAX_OPTIONS];
     int num_options_menu;
     const char* actual_commands[MAX_OPTIONS];
-    InputArgs needs_keyboard;
-    FocusConsole focus_console;
-    bool show_stopscan_tip;
+    ActionType action;
+    ModeMask mode_mask;
 } UART_TerminalItem;
 
 // NUM_MENU_ITEMS defined in uart_terminal_app_i.h - if you add an entry here, increment it!
-const UART_TerminalItem items[NUM_MENU_ITEMS] = {
-    {"Console",
-     {"115200", "75", "110", "150", "300", "600", "1200", "1800", "2400", "4800", "7200", "9600", "14400", "19200", "31250", "38400", "56000", "57600", "76800", "128000", "230400", "250000", "256000", "460800", "921600"},
-     25,
-     {"115200", "75", "110", "150", "300", "600", "1200", "1800", "2400", "4800", "7200", "9600", "14400", "19200", "31250", "38400", "56000", "57600", "76800", "128000", "230400", "250000", "256000", "460800", "921600"},
-     NO_ARGS,
-     FOCUS_CONSOLE_END,
-     NO_TIP},
-    {"Send command", {""}, 1, {""}, INPUT_ARGS, FOCUS_CONSOLE_END, NO_TIP},
-    {"Send AT command", {""}, 1, {"AT"}, INPUT_ARGS, FOCUS_CONSOLE_END, NO_TIP},
+static const UART_TerminalItem items[START_MENU_ITEMS] = {
+    {"Setup", {""}, 1, {""}, OPEN_SETUP, BOTH_MODES},
+    {"Open port", {""}, 1, {""}, OPEN_PORT, BOTH_MODES},
+    {"Send packet", {""}, 1, {""}, SEND_CMD, HEX_MODE},
+    {"Send command", {""}, 1, {""}, SEND_CMD, TEXT_MODE},
+    {"Send AT command", {""}, 1, {"AT"}, SEND_CMD, TEXT_MODE},
     {"Fast cmd",
      {"help", "uptime", "date", "df -h", "ps", "dmesg", "reboot", "poweroff"},
      8,
      {"help", "uptime", "date", "df -h", "ps", "dmesg", "reboot", "poweroff"},
-     INPUT_ARGS,
-     FOCUS_CONSOLE_END,
-     NO_TIP},
-    {"Help", {""}, 1, {"help"}, NO_ARGS, FOCUS_CONSOLE_START, SHOW_STOPSCAN_TIP},
+     SEND_CMD, TEXT_MODE},
+    {"Help", {""}, 1, {"help"}, OPEN_HELP, BOTH_MODES},
 };
 
 static void uart_terminal_scene_start_var_list_enter_callback(void* context, uint32_t index) {
     furi_assert(context);
     UART_TerminalApp* app = context;
 
-    furi_assert(index < NUM_MENU_ITEMS);
+    furi_assert(index < START_MENU_ITEMS);
     const UART_TerminalItem* item = &items[index];
 
     const int selected_option_index = app->selected_option_index[index];
     furi_assert(selected_option_index < item->num_options_menu);
     app->selected_tx_string = item->actual_commands[selected_option_index];
-    app->is_command = (1 <= index);
+    app->is_command = false;
     app->is_custom_tx_string = false;
     app->selected_menu_index = index;
-    app->focus_console_start = (item->focus_console == FOCUS_CONSOLE_TOGGLE) ?
-                                   (selected_option_index == 0) :
-                                   item->focus_console;
-    app->show_stopscan_tip = item->show_stopscan_tip;
+    app->show_stopscan_tip = false;
+    app->focus_console_start = false;
 
-    bool needs_keyboard = (item->needs_keyboard == TOGGLE_ARGS) ? (selected_option_index != 0) :
-                                                                  item->needs_keyboard;
-    if(needs_keyboard) {
-        view_dispatcher_send_custom_event(app->view_dispatcher, UART_TerminalEventStartKeyboard);
-    } else {
+    switch (item->action)
+    {
+    case OPEN_SETUP:
+        view_dispatcher_send_custom_event(app->view_dispatcher, UART_TerminalEventSetup);
+        return;
+    case SEND_CMD:
+        app->is_command = true;
+        if(app->hex_mode) {
+            view_dispatcher_send_custom_event(app->view_dispatcher, UART_TerminalEventStartKeyboardHex);
+        }
+		else {
+            view_dispatcher_send_custom_event(app->view_dispatcher, UART_TerminalEventStartKeyboardText);
+		}
+        return;
+    case OPEN_PORT:
         view_dispatcher_send_custom_event(app->view_dispatcher, UART_TerminalEventStartConsole);
+        return;
+    case OPEN_HELP:
+        app->show_stopscan_tip = true;
+        app->focus_console_start = true;
+        view_dispatcher_send_custom_event(app->view_dispatcher, UART_TerminalEventStartConsole);
+        return;
+    default:
+        return;
     }
 }
 
@@ -90,22 +95,32 @@ void uart_terminal_scene_start_on_enter(void* context) {
         var_item_list, uart_terminal_scene_start_var_list_enter_callback, app);
 
     VariableItem* item;
-    for(int i = 0; i < NUM_MENU_ITEMS; ++i) {
-        item = variable_item_list_add(
-            var_item_list,
-            items[i].item_string,
-            items[i].num_options_menu,
-            uart_terminal_scene_start_var_list_change_callback,
-            app);
-        variable_item_set_current_value_index(item, app->selected_option_index[i]);
-        variable_item_set_current_value_text(
-            item, items[i].options_menu[app->selected_option_index[i]]);
+    for(int i = 0; i < START_MENU_ITEMS; ++i) {
+        bool enabled = false;
+        if(app->hex_mode && (items[i].mode_mask & HEX_MODE)) {
+            enabled = true;
+        }
+        if(!app->hex_mode && (items[i].mode_mask & TEXT_MODE)) {
+            enabled = true;
+        }
+
+        if(enabled) {
+            item = variable_item_list_add(
+                var_item_list,
+                items[i].item_string,
+                items[i].num_options_menu,
+                uart_terminal_scene_start_var_list_change_callback,
+                app);
+            variable_item_set_current_value_index(item, app->selected_option_index[i]);
+            variable_item_set_current_value_text(
+                item, items[i].options_menu[app->selected_option_index[i]]);
+        }
     }
 
     variable_item_list_set_selected_item(
         var_item_list, scene_manager_get_scene_state(app->scene_manager, UART_TerminalSceneStart));
 
-    view_dispatcher_switch_to_view(app->view_dispatcher, UART_TerminalAppViewVarItemList);
+	view_dispatcher_switch_to_view(app->view_dispatcher, UART_TerminalAppViewVarItemList);
 }
 
 bool uart_terminal_scene_start_on_event(void* context, SceneManagerEvent event) {
@@ -114,10 +129,18 @@ bool uart_terminal_scene_start_on_event(void* context, SceneManagerEvent event) 
     bool consumed = false;
 
     if(event.type == SceneManagerEventTypeCustom) {
-        if(event.event == UART_TerminalEventStartKeyboard) {
+        if(event.event == UART_TerminalEventSetup) {
+            scene_manager_set_scene_state(
+                app->scene_manager, UART_TerminalSceneStart, app->selected_menu_index);
+            scene_manager_next_scene(app->scene_manager, UART_TerminalAppViewSetup);
+        } else if(event.event == UART_TerminalEventStartKeyboardText) {
             scene_manager_set_scene_state(
                 app->scene_manager, UART_TerminalSceneStart, app->selected_menu_index);
             scene_manager_next_scene(app->scene_manager, UART_TerminalAppViewTextInput);
+        } else if(event.event == UART_TerminalEventStartKeyboardHex) {
+            scene_manager_set_scene_state(
+                app->scene_manager, UART_TerminalSceneStart, app->selected_menu_index);
+            scene_manager_next_scene(app->scene_manager, UART_TerminalAppViewHexInput);
         } else if(event.event == UART_TerminalEventStartConsole) {
             scene_manager_set_scene_state(
                 app->scene_manager, UART_TerminalSceneStart, app->selected_menu_index);
